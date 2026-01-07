@@ -5,6 +5,7 @@
  */
 #define DT_DRV_COMPAT zmk_behavior_sensor_attr_cycle
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <drivers/behavior.h>
 #include <zephyr/logging/log.h>
 #include <zmk/behavior.h>
@@ -68,6 +69,12 @@ struct behavior_sensor_attr_cycle_data {
     struct behavior_sensor_attr_cycle_persistant_state state;
 };
 
+#ifndef DEVICE_DT_GET_OR_NULL
+/* Fallback for Zephyr versions without DEVICE_DT_GET_OR_NULL */
+#define DEVICE_DT_GET_OR_NULL(node) \
+    (DT_NODE_HAS_STATUS(node, okay) ? DEVICE_DT_GET(node) : NULL)
+#endif
+
 #if IS_ENABLED(CONFIG_SETTINGS)
 
 static void save_work_callback(struct k_work *work) {
@@ -88,7 +95,13 @@ static void load_work_callback(struct k_work *work) {
     const struct device *dev = data->dev;
     const struct behavior_sensor_attr_cycle_config *config = dev->config;
 
-    struct sensor_value val = { val1: config->values[data->state.index], val2: 0 };
+    /* If sensor device is not present or not ready, skip */
+    if (config->sensor_device == NULL || !device_is_ready(config->sensor_device)) {
+        LOG_DBG("load_work: sensor device not present or not ready, skipping");
+        return;
+    }
+
+    struct sensor_value val = { .val1 = config->values[data->state.index], .val2 = 0 };
     sensor_attr_set(config->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
 }
 
@@ -101,7 +114,7 @@ static int behavior_sensor_attr_cycle_init(const struct device *dev) {
     
 #if IS_ENABLED(CONFIG_SETTINGS)
     if (config->persistant) {
-        k_work_init_delayable (&data->save_work, save_work_callback);
+        k_work_init_delayable(&data->save_work, save_work_callback);
     }
 #endif
     return 0;
@@ -113,15 +126,22 @@ static int on_keymap_binding_pressed(struct zmk_behavior_binding *binding,
     struct behavior_sensor_attr_cycle_data *data = dev->data;
     const struct behavior_sensor_attr_cycle_config *config = dev->config;
 
-    // Update the index, then send the new value to the sensor
+    /* Update the index, then send the new value to the sensor */
     data->state.index = (data->state.index + binding->param1) % config->length;
-    struct sensor_value val = { val1: config->values[data->state.index], val2: 0 };
-    sensor_attr_set(config->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
+
+    /* If sensor device is not present or not ready, skip setting attribute */
+    if (config->sensor_device == NULL || !device_is_ready(config->sensor_device)) {
+        LOG_DBG("binding_pressed: sensor device not present or not ready, skipping attribute set");
+    } else {
+        struct sensor_value val = { .val1 = config->values[data->state.index], .val2 = 0 };
+        sensor_attr_set(config->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
+    }
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     if (config->persistant) {
-        // We try to limit flash writes. It seems likley the user will activate the behaviour multiple times
-        // looking for a specific value, so delay writing a little bit.
+        /* We try to limit flash writes. It seems likley the user will activate the behaviour multiple times
+         * looking for a specific value, so delay writing a little bit.
+         */
         k_work_reschedule(&data->save_work, K_MSEC(config->save_delay));
     }
 #endif
@@ -132,13 +152,13 @@ static const struct behavior_driver_api behavior_sensor_attr_cycle_driver_api = 
     .binding_pressed = on_keymap_binding_pressed,
 #if IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
     .parameter_metadata = &metadata,
-#endif // IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA)
+#endif /* IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA) */
 };
 
 #define CYCLE_INST(n)                                                                              \
     static struct behavior_sensor_attr_cycle_data data##n = {};                                    \
     static const struct behavior_sensor_attr_cycle_config config##n = {                            \
-        .sensor_device =  DEVICE_DT_GET(DT_INST_PHANDLE(n, sensor_device)),                        \
+        .sensor_device =  DEVICE_DT_GET_OR_NULL(DT_INST_PHANDLE(n, sensor_device)),                \
         .length = DT_PROP_LEN(DT_DRV_INST(n), values),                                             \
         .values = DT_PROP(DT_DRV_INST(n), values),                                                 \
         .attr = DT_PROP(DT_DRV_INST(n), attr),                                                     \
@@ -162,7 +182,7 @@ DT_INST_FOREACH_STATUS_OKAY(CYCLE_INST)
         break; \
     }
 
-// This is called once at startup when we have read our settings
+/* This is called once at startup when we have read our settings */
 static int sensor_attr_cycle_settings_load_cb(const char *name, size_t len, settings_read_cb read_cb, void *cb_arg) {
     struct behavior_sensor_attr_cycle_data *data = NULL;
     const struct behavior_sensor_attr_cycle_config *config = NULL;
@@ -174,8 +194,9 @@ static int sensor_attr_cycle_settings_load_cb(const char *name, size_t len, sett
         return -ENOENT;
     }
 
-    // The identifier is the instance index, this switch statement initializes our data and config pointers
-    // to point at the right structures.
+    /* The identifier is the instance index, this switch statement initializes our data and config pointers
+     * to point at the right structures.
+     */
     switch (identifier) {
         DT_INST_FOREACH_STATUS_OKAY(SETTINGS_INST)
         default:
