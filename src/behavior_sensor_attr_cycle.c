@@ -108,7 +108,7 @@ static void load_work_callback(struct k_work *work) {
     }
 
     struct sensor_value val = { .val1 = config->values[data->state.index], .val2 = 0 };
-    sensor_attr_set(config->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
+    sensor_attr_set(data->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
 }
 
 #endif
