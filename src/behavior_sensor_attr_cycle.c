@@ -71,8 +71,13 @@ struct behavior_sensor_attr_cycle_data {
 
 #ifndef DEVICE_DT_GET_OR_NULL
 /* Fallback for Zephyr versions without DEVICE_DT_GET_OR_NULL */
+/* Use COND_CODE_1 so that if the node is not present we do NOT expand to DEVICE_DT_GET()
+ * (which would create a compile-time reference to __device_dts_ord_* and cause link errors).
+ */
+#include <sys/util.h>
+
 #define DEVICE_DT_GET_OR_NULL(node) \
-    (DT_NODE_HAS_STATUS(node, okay) ? DEVICE_DT_GET(node) : NULL)
+    COND_CODE_1(DT_NODE_HAS_STATUS(node, okay), (DEVICE_DT_GET(node)), (NULL))
 #endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
