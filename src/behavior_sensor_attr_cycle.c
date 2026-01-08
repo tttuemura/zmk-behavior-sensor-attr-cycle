@@ -62,6 +62,7 @@ static const struct behavior_parameter_metadata metadata = {
 
 struct behavior_sensor_attr_cycle_data {
     const struct device *dev;
+    const struct device *sensor_device; /* 追加: 実行時にここへ格納する */
 #if IS_ENABLED(CONFIG_SETTINGS)
     struct k_work_delayable load_work;
     struct k_work_delayable save_work;
@@ -101,7 +102,7 @@ static void load_work_callback(struct k_work *work) {
     const struct behavior_sensor_attr_cycle_config *config = dev->config;
 
     /* If sensor device is not present or not ready, skip */
-    if (config->sensor_device == NULL || !device_is_ready(config->sensor_device)) {
+    if (data->sensor_device == NULL || !device_is_ready(data->sensor_device)) {
         LOG_DBG("load_work: sensor device not present or not ready, skipping");
         return;
     }
@@ -123,7 +124,7 @@ static int behavior_sensor_attr_cycle_init(const struct device *dev) {
     }
 #endif
     return 0;
-};
+}
 
 static int on_keymap_binding_pressed(struct zmk_behavior_binding *binding,
                                      struct zmk_behavior_binding_event event) {
@@ -135,11 +136,11 @@ static int on_keymap_binding_pressed(struct zmk_behavior_binding *binding,
     data->state.index = (data->state.index + binding->param1) % config->length;
 
     /* If sensor device is not present or not ready, skip setting attribute */
-    if (config->sensor_device == NULL || !device_is_ready(config->sensor_device)) {
+    if (data->sensor_device == NULL || !device_is_ready(data->sensor_device)) {
         LOG_DBG("binding_pressed: sensor device not present or not ready, skipping attribute set");
     } else {
         struct sensor_value val = { .val1 = config->values[data->state.index], .val2 = 0 };
-        sensor_attr_set(config->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
+        sensor_attr_set(data->sensor_device, SENSOR_CHAN_ALL, config->attr, &val);
     }
 
 #if IS_ENABLED(CONFIG_SETTINGS)
@@ -160,22 +161,29 @@ static const struct behavior_driver_api behavior_sensor_attr_cycle_driver_api = 
 #endif /* IS_ENABLED(CONFIG_ZMK_BEHAVIOR_METADATA) */
 };
 
-#define CYCLE_INST(n)                                                                              \
-    static struct behavior_sensor_attr_cycle_data data##n = {};                                    \
-    static const struct behavior_sensor_attr_cycle_config config##n = {                            \
-        .sensor_device =  DEVICE_DT_GET_OR_NULL(DT_INST_PHANDLE(n, sensor_device)),                \
-        .length = DT_PROP_LEN(DT_DRV_INST(n), values),                                             \
-        .values = DT_PROP(DT_DRV_INST(n), values),                                                 \
-        .attr = DT_PROP(DT_DRV_INST(n), attr),                                                     \
-        .save_delay = DT_PROP(DT_DRV_INST(n), save_delay),                                         \
-        .load_delay = DT_PROP(DT_DRV_INST(n), load_delay),                                         \
-        .persistant = DT_PROP(DT_DRV_INST(n), persistant),                                         \
-        .settings_key = SETTINGS_PREFIX "/" #n,                                                    \
-    };                                                                                             \
-    BEHAVIOR_DT_INST_DEFINE(n, behavior_sensor_attr_cycle_init, NULL,                              \
-                            &data##n, &config##n, POST_KERNEL,                                     \
-                            CONFIG_INPUT_INIT_PRIORITY,                                            \
+/* マクロ: 各インスタンスごとに data/config を作り、init ラッパーで sensor_device を実行時に解決する */
+#define CYCLE_INST(n)                                                                                 \
+    static struct behavior_sensor_attr_cycle_data data##n = {};                                       \
+    static const struct behavior_sensor_attr_cycle_config config##n = {                               \
+        .sensor_device = NULL, /* 静的初期化しない */                                                  \
+        .length = DT_PROP_LEN(DT_DRV_INST(n), values),                                                \
+        .values = DT_PROP(DT_DRV_INST(n), values),                                                    \
+        .attr = DT_PROP(DT_DRV_INST(n), attr),                                                        \
+        .save_delay = DT_PROP(DT_DRV_INST(n), save_delay),                                            \
+        .load_delay = DT_PROP(DT_DRV_INST(n), load_delay),                                            \
+        .persistant = DT_PROP(DT_DRV_INST(n), persistant),                                            \
+        .settings_key = SETTINGS_PREFIX "/" #n,                                                       \
+    };                                                                                                \
+    static int behavior_sensor_attr_cycle_init_##n(const struct device *dev) {                         \
+        /* 実行時に sensor_device を解決して data に格納 */                                           \
+        data##n.sensor_device = DEVICE_DT_GET_OR_NULL(DT_INST_PHANDLE(n, sensor_device));              \
+        return behavior_sensor_attr_cycle_init(dev);                                                  \
+    }                                                                                                  \
+    BEHAVIOR_DT_INST_DEFINE(n, behavior_sensor_attr_cycle_init_##n, NULL,                              \
+                            &data##n, &config##n, POST_KERNEL,                                         \
+                            CONFIG_INPUT_INIT_PRIORITY,                                                \
                             &behavior_sensor_attr_cycle_driver_api);
+
 
 DT_INST_FOREACH_STATUS_OKAY(CYCLE_INST)
 
